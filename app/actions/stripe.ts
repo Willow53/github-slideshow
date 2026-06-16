@@ -217,24 +217,31 @@ export async function startCheckoutSession(guideId: number) {
   
   const session = await stripe.checkout.sessions.create(sessionOptions)
   
-  return session.client_secret
+  // Return both the client secret (for the embedded UI) and the session id
+  // (so the client can confirm + record the purchase on completion).
+  return { clientSecret: session.client_secret, sessionId: session.id }
 }
 
-export async function completeCheckout(sessionId: string) {
+/**
+ * Idempotently records a purchase from a completed Stripe Checkout session.
+ * Shared by the client-side completion handler and the webhook so a purchase
+ * is recorded exactly once regardless of which path runs first.
+ */
+export async function recordPurchaseFromSession(sessionId: string) {
   const session = await stripe.checkout.sessions.retrieve(sessionId)
   
   if (session.payment_status !== 'paid') {
-    throw new Error('Payment not completed')
+    return { recorded: false, reason: 'unpaid' as const }
   }
   
   const guideId = parseInt(session.metadata?.guideId || '0')
   const userId = session.metadata?.userId
   
   if (!guideId || !userId) {
-    throw new Error('Invalid session metadata')
+    return { recorded: false, reason: 'invalid-metadata' as const }
   }
   
-  // Check if purchase already recorded
+  // Idempotency guard: skip if this guide is already owned by this user.
   const [existingPurchase] = await db
     .select()
     .from(purchases)
@@ -242,10 +249,9 @@ export async function completeCheckout(sessionId: string) {
     .limit(1)
   
   if (existingPurchase) {
-    return { guideId }
+    return { recorded: true, guideId, alreadyExisted: true }
   }
   
-  // Record the purchase
   await db.insert(purchases).values({
     userId,
     guideId,
@@ -253,7 +259,19 @@ export async function completeCheckout(sessionId: string) {
     amountPaid: session.amount_total || 0,
   })
   
-  return { guideId }
+  return { recorded: true, guideId, alreadyExisted: false }
+}
+
+export async function completeCheckout(sessionId: string) {
+  const result = await recordPurchaseFromSession(sessionId)
+  
+  if (!result.recorded) {
+    throw new Error(
+      result.reason === 'unpaid' ? 'Payment not completed' : 'Invalid session metadata'
+    )
+  }
+  
+  return { guideId: result.guideId }
 }
 
 export async function getCheckoutSession(sessionId: string) {
