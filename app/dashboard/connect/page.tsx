@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { Suspense, useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { ArrowLeft, CreditCard, CheckCircle2, ExternalLink, AlertCircle, Loader2 } from 'lucide-react'
@@ -14,7 +14,28 @@ import {
   createConnectLoginLink
 } from '@/app/actions/stripe'
 
+export const dynamic = 'force-dynamic'
+
+function ConnectLoading() {
+  return (
+    <div className="min-h-screen bg-background">
+      <Navbar />
+      <div className="container mx-auto px-4 py-8 flex items-center justify-center">
+        <Loader2 className="w-8 h-8 animate-spin text-primary" />
+      </div>
+    </div>
+  )
+}
+
 export default function ConnectOnboardingPage() {
+  return (
+    <Suspense fallback={<ConnectLoading />}>
+      <ConnectOnboardingContent />
+    </Suspense>
+  )
+}
+
+function ConnectOnboardingContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const [status, setStatus] = useState<{
