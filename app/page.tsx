@@ -1,55 +1,26 @@
 import Link from 'next/link'
-import { MapPin, Star, Shield, Globe, ArrowRight } from 'lucide-react'
+import { MapPin, Star, Shield, ArrowRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Navbar } from '@/components/navbar'
-import { getPublishedGuides } from '@/app/actions/guides'
+import { getPublishedGuides, getCitiesWithGuides } from '@/app/actions/guides'
+import { GlobeHero } from '@/components/globe/globe-hero'
 
 export const dynamic = 'force-dynamic'
 
 export default async function HomePage() {
-  const guidesData = await getPublishedGuides()
+  const [guidesData, cities] = await Promise.all([
+    getPublishedGuides(),
+    getCitiesWithGuides(),
+  ])
   const featuredGuides = guidesData.slice(0, 3)
 
   return (
     <div className="min-h-svh flex flex-col">
       <Navbar />
-      
-      {/* Hero Section */}
-      <section className="relative overflow-hidden bg-gradient-to-b from-primary/5 via-background to-background">
-        <div className="container mx-auto px-4 py-20 md:py-32">
-          <div className="max-w-3xl mx-auto text-center">
-            <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-primary/10 text-primary text-sm font-medium mb-6">
-              <Globe className="w-4 h-4" />
-              Discover authentic local experiences
-            </div>
-            <h1 className="text-4xl md:text-6xl font-bold tracking-tight text-foreground mb-6 text-balance">
-              Your next adventure starts with local knowledge
-            </h1>
-            <p className="text-lg md:text-xl text-muted-foreground mb-8 max-w-2xl mx-auto text-pretty">
-              Buy curated Google Maps lists from locals who know their city best. 
-              Skip the tourist traps and discover hidden gems.
-            </p>
-            <div className="flex flex-col sm:flex-row gap-4 justify-center">
-              <Button size="lg" asChild className="text-base">
-                <Link href="/explore">
-                  Explore Guides
-                  <ArrowRight className="w-4 h-4 ml-2" />
-                </Link>
-              </Button>
-              <Button size="lg" variant="outline" asChild className="text-base">
-                <Link href="/sign-up">Start Selling</Link>
-              </Button>
-            </div>
-          </div>
-        </div>
-        
-        {/* Decorative elements */}
-        <div className="absolute inset-0 -z-10 overflow-hidden">
-          <div className="absolute top-1/4 left-1/4 w-64 h-64 bg-primary/5 rounded-full blur-3xl" />
-          <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-accent/10 rounded-full blur-3xl" />
-        </div>
-      </section>
+
+      {/* Interactive Globe Hero */}
+      <GlobeHero cities={cities} />
 
       {/* How It Works */}
       <section className="py-20 bg-background">

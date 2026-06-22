@@ -3,7 +3,7 @@
 import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
 import { guides, places, purchases, user } from '@/lib/db/schema'
-import { and, desc, eq, ilike, or } from 'drizzle-orm'
+import { and, desc, eq, ilike, or, sql } from 'drizzle-orm'
 import { headers } from 'next/headers'
 import { revalidatePath } from 'next/cache'
 
@@ -211,6 +211,57 @@ export async function getPublishedGuides(search?: string) {
   } catch (error) {
     console.error('[v0] getPublishedGuides error:', error)
     // Return empty array if database is not available
+    return []
+  }
+}
+
+// Globe / city aggregation
+
+export type CityWithGuides = {
+  city: string
+  country: string
+  guideCount: number
+  minPrice: number
+  lat: number | null
+  lng: number | null
+}
+
+export async function getCitiesWithGuides(): Promise<CityWithGuides[]> {
+  try {
+    const result = await db.execute(sql`
+      SELECT
+        g.city AS city,
+        g.country AS country,
+        COUNT(DISTINCT g.id)::int AS "guideCount",
+        MIN(g."priceInCents")::int AS "minPrice",
+        AVG(p.latitude)::float AS lat,
+        AVG(p.longitude)::float AS lng
+      FROM guides g
+      LEFT JOIN places p ON p."guideId" = g.id
+      WHERE g."isPublished" = true
+      GROUP BY g.city, g.country
+      ORDER BY "guideCount" DESC
+    `)
+    return result.rows as CityWithGuides[]
+  } catch (error) {
+    console.error('[v0] getCitiesWithGuides error:', error)
+    return []
+  }
+}
+
+export async function getGuidesByCity(city: string) {
+  try {
+    return db
+      .select({
+        guide: guides,
+        seller: { name: user.name, id: user.id },
+      })
+      .from(guides)
+      .innerJoin(user, eq(guides.userId, user.id))
+      .where(and(eq(guides.isPublished, true), ilike(guides.city, city)))
+      .orderBy(desc(guides.createdAt))
+  } catch (error) {
+    console.error('[v0] getGuidesByCity error:', error)
     return []
   }
 }
