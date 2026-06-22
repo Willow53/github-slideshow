@@ -81,15 +81,25 @@ function ConnectOnboardingContent() {
     try {
       // Create account if needed
       if (!status?.hasAccount) {
-        await createConnectAccount()
+        const created = await createConnectAccount()
+        if (!created.ok) {
+          setError(created.error)
+          setActionLoading(false)
+          return
+        }
       }
       
       // Get onboarding link
       const currentUrl = window.location.origin + window.location.pathname
-      const { url } = await createConnectOnboardingLink(currentUrl)
+      const link = await createConnectOnboardingLink(currentUrl)
+      if (!link.ok) {
+        setError(link.error)
+        setActionLoading(false)
+        return
+      }
       
       // Redirect to Stripe
-      window.location.href = url
+      window.location.href = link.url
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to start onboarding')
       setActionLoading(false)
@@ -98,9 +108,14 @@ function ConnectOnboardingContent() {
   
   async function handleOpenDashboard() {
     setActionLoading(true)
+    setError(null)
     try {
-      const { url } = await createConnectLoginLink()
-      window.open(url, '_blank')
+      const link = await createConnectLoginLink()
+      if (!link.ok) {
+        setError(link.error)
+        return
+      }
+      window.open(link.url, '_blank')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to open dashboard')
     } finally {

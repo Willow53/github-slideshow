@@ -21,7 +21,24 @@ async function getUser() {
 
 // --- Stripe Connect Onboarding ---
 
-export async function createConnectAccount() {
+// Result types let us return errors as data. Errors *thrown* from a server
+// action are masked to a generic message in production builds, so anything the
+// user needs to read must be returned, not thrown.
+type ConnectResult<T> = ({ ok: true } & T) | { ok: false; error: string }
+
+/**
+ * Translates a Stripe error into a clear, actionable message. The most common
+ * setup issue is that Connect has not been enabled on the platform account.
+ */
+function describeStripeError(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err)
+  if (/signed up for Connect|Connect.*dashboard\.stripe\.com\/connect/i.test(message)) {
+    return 'Stripe Connect is not enabled on this account yet. Enable Connect in your Stripe Dashboard (Settings → Connect, or dashboard.stripe.com/connect), then try again.'
+  }
+  return message || 'Something went wrong with Stripe. Please try again.'
+}
+
+export async function createConnectAccount(): Promise<ConnectResult<{ accountId: string }>> {
   const currentUser = await getUser()
   
   // Check if user already has a Stripe account
@@ -33,32 +50,39 @@ export async function createConnectAccount() {
   
   if (dbUser?.stripeAccountId) {
     // Return existing account
-    return { accountId: dbUser.stripeAccountId }
+    return { ok: true, accountId: dbUser.stripeAccountId }
   }
   
-  // Create a new Connect account using the Accounts API
-  const account = await stripe.accounts.create({
-    type: 'express',
-    email: currentUser.email,
-    metadata: {
-      userId: currentUser.id,
-    },
-    capabilities: {
-      card_payments: { requested: true },
-      transfers: { requested: true },
-    },
-  })
-  
-  // Save the account ID to the user
-  await db
-    .update(user)
-    .set({ stripeAccountId: account.id })
-    .where(eq(user.id, currentUser.id))
-  
-  return { accountId: account.id }
+  try {
+    // Create a new Connect account using the Accounts API
+    const account = await stripe.accounts.create({
+      type: 'express',
+      email: currentUser.email,
+      metadata: {
+        userId: currentUser.id,
+      },
+      capabilities: {
+        card_payments: { requested: true },
+        transfers: { requested: true },
+      },
+    })
+    
+    // Save the account ID to the user
+    await db
+      .update(user)
+      .set({ stripeAccountId: account.id })
+      .where(eq(user.id, currentUser.id))
+    
+    return { ok: true, accountId: account.id }
+  } catch (err) {
+    console.error('[v0] createConnectAccount error:', err)
+    return { ok: false, error: describeStripeError(err) }
+  }
 }
 
-export async function createConnectOnboardingLink(returnUrl: string) {
+export async function createConnectOnboardingLink(
+  returnUrl: string
+): Promise<ConnectResult<{ url: string }>> {
   const currentUser = await getUser()
   
   // Get user's Stripe account
@@ -69,18 +93,23 @@ export async function createConnectOnboardingLink(returnUrl: string) {
     .limit(1)
   
   if (!dbUser?.stripeAccountId) {
-    throw new Error('No Stripe account found. Please create one first.')
+    return { ok: false, error: 'No Stripe account found. Please create one first.' }
   }
   
-  // Create an account link for onboarding
-  const accountLink = await stripe.accountLinks.create({
-    account: dbUser.stripeAccountId,
-    refresh_url: `${returnUrl}?refresh=true`,
-    return_url: `${returnUrl}?success=true`,
-    type: 'account_onboarding',
-  })
-  
-  return { url: accountLink.url }
+  try {
+    // Create an account link for onboarding
+    const accountLink = await stripe.accountLinks.create({
+      account: dbUser.stripeAccountId,
+      refresh_url: `${returnUrl}?refresh=true`,
+      return_url: `${returnUrl}?success=true`,
+      type: 'account_onboarding',
+    })
+    
+    return { ok: true, url: accountLink.url }
+  } catch (err) {
+    console.error('[v0] createConnectOnboardingLink error:', err)
+    return { ok: false, error: describeStripeError(err) }
+  }
 }
 
 export async function getConnectAccountStatus() {
@@ -113,20 +142,32 @@ export async function getConnectAccountStatus() {
     }
   }
   
-  // Get account details from Stripe
-  const account = await stripe.accounts.retrieve(dbUser.stripeAccountId)
-  
-  return {
-    isAuthenticated: true,
-    hasAccount: true,
-    isOnboarded: account.details_submitted ?? false,
-    chargesEnabled: account.charges_enabled ?? false,
-    payoutsEnabled: account.payouts_enabled ?? false,
-    accountId: account.id,
+  try {
+    // Get account details from Stripe
+    const account = await stripe.accounts.retrieve(dbUser.stripeAccountId)
+    
+    return {
+      isAuthenticated: true,
+      hasAccount: true,
+      isOnboarded: account.details_submitted ?? false,
+      chargesEnabled: account.charges_enabled ?? false,
+      payoutsEnabled: account.payouts_enabled ?? false,
+      accountId: account.id,
+    }
+  } catch (err) {
+    console.error('[v0] getConnectAccountStatus error:', err)
+    // Account id exists locally but Stripe can't read it (e.g. Connect disabled).
+    return {
+      isAuthenticated: true,
+      hasAccount: true,
+      isOnboarded: false,
+      chargesEnabled: false,
+      payoutsEnabled: false,
+    }
   }
 }
 
-export async function createConnectLoginLink() {
+export async function createConnectLoginLink(): Promise<ConnectResult<{ url: string }>> {
   const currentUser = await getUser()
   
   // Get user's Stripe account
@@ -137,12 +178,16 @@ export async function createConnectLoginLink() {
     .limit(1)
   
   if (!dbUser?.stripeAccountId) {
-    throw new Error('No Stripe account found')
+    return { ok: false, error: 'No Stripe account found' }
   }
   
-  const loginLink = await stripe.accounts.createLoginLink(dbUser.stripeAccountId)
-  
-  return { url: loginLink.url }
+  try {
+    const loginLink = await stripe.accounts.createLoginLink(dbUser.stripeAccountId)
+    return { ok: true, url: loginLink.url }
+  } catch (err) {
+    console.error('[v0] createConnectLoginLink error:', err)
+    return { ok: false, error: describeStripeError(err) }
+  }
 }
 
 export async function startCheckoutSession(guideId: number) {
