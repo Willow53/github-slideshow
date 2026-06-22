@@ -41,7 +41,9 @@ export async function POST(req: NextRequest) {
       case 'checkout.session.completed':
       case 'checkout.session.async_payment_succeeded': {
         const session = event.data.object as Stripe.Checkout.Session
-        const result = await recordPurchaseFromSession(session.id)
+        // For direct charges the event is delivered on behalf of the connected
+        // account, so event.account tells us where the session lives.
+        const result = await recordPurchaseFromSession(session.id, event.account)
         console.log('[v0] Webhook recorded purchase:', result)
         break
       }

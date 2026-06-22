@@ -1,34 +1,70 @@
 'use client'
 
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   EmbeddedCheckout,
   EmbeddedCheckoutProvider,
 } from '@stripe/react-stripe-js'
-import { loadStripe } from '@stripe/stripe-js'
+import { loadStripe, type Stripe } from '@stripe/stripe-js'
 import { Loader2, CheckCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { startCheckoutSession, completeCheckout } from '@/app/actions/stripe'
 
-const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY!)
+const publishableKey = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY!
+
+// Cache one Stripe.js instance per account context (platform vs. each connected
+// account) so we don't reload the script on every render.
+const stripeCache = new Map<string, Promise<Stripe | null>>()
+function getStripePromise(connectedAccountId: string | null) {
+  const key = connectedAccountId ?? 'platform'
+  if (!stripeCache.has(key)) {
+    stripeCache.set(
+      key,
+      connectedAccountId
+        ? loadStripe(publishableKey, { stripeAccount: connectedAccountId })
+        : loadStripe(publishableKey)
+    )
+  }
+  return stripeCache.get(key)!
+}
 
 export function CheckoutForm({ guideId }: { guideId: number }) {
   const router = useRouter()
-  const [status, setStatus] = useState<'checkout' | 'processing' | 'complete' | 'error'>('checkout')
+  const [status, setStatus] = useState<'init' | 'checkout' | 'processing' | 'complete' | 'error'>('init')
   const [error, setError] = useState<string | null>(null)
-  // Captured when the session is created so onComplete can record reliably,
-  // since embedded checkout never navigates and exposes no session_id in the URL.
+  const [clientSecret, setClientSecret] = useState<string | null>(null)
+  const [connectedAccountId, setConnectedAccountId] = useState<string | null>(null)
   const sessionIdRef = useRef<string | null>(null)
 
-  const fetchClientSecret = useCallback(async () => {
-    const { clientSecret, sessionId } = await startCheckoutSession(guideId)
-    sessionIdRef.current = sessionId
-    if (!clientSecret) {
-      throw new Error('Failed to start checkout session')
+  // Create the checkout session once on mount. We need the connected account id
+  // up front so Stripe.js can be initialized against the right account for
+  // direct charges.
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const result = await startCheckoutSession(guideId)
+        if (cancelled) return
+        sessionIdRef.current = result.sessionId
+        setConnectedAccountId(result.connectedAccountId)
+        setClientSecret(result.clientSecret)
+        setStatus('checkout')
+      } catch (err) {
+        if (cancelled) return
+        setError(err instanceof Error ? err.message : 'Failed to start checkout')
+        setStatus('error')
+      }
+    })()
+    return () => {
+      cancelled = true
     }
-    return clientSecret
   }, [guideId])
+
+  const stripePromise = useMemo(
+    () => (status === 'checkout' ? getStripePromise(connectedAccountId) : null),
+    [status, connectedAccountId]
+  )
 
   const goToGuide = useCallback(() => {
     router.push(`/guide/${guideId}`)
@@ -37,13 +73,12 @@ export function CheckoutForm({ guideId }: { guideId: number }) {
 
   const handleComplete = useCallback(async () => {
     setStatus('processing')
-
     try {
       const sessionId = sessionIdRef.current
       if (sessionId) {
-        // Records the purchase server-side (idempotent). The webhook is the
-        // production backstop in case this call doesn't run.
-        await completeCheckout(sessionId)
+        // Idempotent server-side recording. The webhook is the production
+        // backstop in case this call doesn't run.
+        await completeCheckout(sessionId, connectedAccountId)
       }
     } catch (err) {
       // The webhook will still record the purchase, so we don't block the user.
@@ -52,7 +87,16 @@ export function CheckoutForm({ guideId }: { guideId: number }) {
       setStatus('complete')
       setTimeout(goToGuide, 2000)
     }
-  }, [goToGuide])
+  }, [connectedAccountId, goToGuide])
+
+  if (status === 'init') {
+    return (
+      <div className="text-center py-12">
+        <Loader2 className="w-12 h-12 animate-spin text-primary mx-auto mb-4" />
+        <p className="text-lg font-medium text-foreground">Preparing checkout...</p>
+      </div>
+    )
+  }
 
   if (status === 'processing') {
     return (
@@ -77,26 +121,28 @@ export function CheckoutForm({ guideId }: { guideId: number }) {
     )
   }
 
-  if (error) {
+  if (status === 'error' || error) {
     return (
       <div className="text-center py-12">
-        <p className="text-red-600 mb-4">{error}</p>
-        <Button onClick={() => setError(null)}>Try Again</Button>
+        <p className="text-red-600 mb-4">{error ?? 'Something went wrong'}</p>
+        <Button onClick={() => router.push(`/guide/${guideId}`)}>Back to Guide</Button>
       </div>
     )
   }
 
   return (
     <div id="checkout">
-      <EmbeddedCheckoutProvider
-        stripe={stripePromise}
-        options={{ 
-          fetchClientSecret,
-          onComplete: handleComplete,
-        }}
-      >
-        <EmbeddedCheckout />
-      </EmbeddedCheckoutProvider>
+      {stripePromise && clientSecret && (
+        <EmbeddedCheckoutProvider
+          stripe={stripePromise}
+          options={{
+            clientSecret,
+            onComplete: handleComplete,
+          }}
+        >
+          <EmbeddedCheckout />
+        </EmbeddedCheckoutProvider>
+      )}
     </div>
   )
 }

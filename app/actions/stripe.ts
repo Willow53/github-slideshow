@@ -54,16 +54,13 @@ export async function createConnectAccount(): Promise<ConnectResult<{ accountId:
   }
   
   try {
-    // Create a new Connect account using the Accounts API
+    // Create a new Standard connected account. Standard accounts manage their
+    // own capabilities and dashboard, so we don't request capabilities here.
     const account = await stripe.accounts.create({
-      type: 'express',
+      type: 'standard',
       email: currentUser.email,
       metadata: {
         userId: currentUser.id,
-      },
-      capabilities: {
-        card_payments: { requested: true },
-        transfers: { requested: true },
       },
     })
     
@@ -250,30 +247,52 @@ export async function startCheckoutSession(guideId: number) {
     },
   }
   
-  // If seller has a connected Stripe account, use destination charges
-  if (seller.stripeAccountId) {
+  // Direct charges: when the seller has a connected Standard account, the
+  // charge is created directly ON that account (via the Stripe-Account header)
+  // and the platform takes an application fee. The seller is the merchant of
+  // record. For sellers without a connected account, fall back to a platform
+  // charge so the marketplace still works during onboarding.
+  const connectedAccountId = seller.stripeAccountId ?? null
+  
+  let session
+  if (connectedAccountId) {
     sessionOptions.payment_intent_data = {
       application_fee_amount: applicationFeeAmount,
-      transfer_data: {
-        destination: seller.stripeAccountId,
-      },
     }
+    session = await stripe.checkout.sessions.create(sessionOptions, {
+      stripeAccount: connectedAccountId,
+    })
+  } else {
+    session = await stripe.checkout.sessions.create(sessionOptions)
   }
   
-  const session = await stripe.checkout.sessions.create(sessionOptions)
-  
-  // Return both the client secret (for the embedded UI) and the session id
-  // (so the client can confirm + record the purchase on completion).
-  return { clientSecret: session.client_secret, sessionId: session.id }
+  // Return the client secret (for the embedded UI), the session id (to record
+  // the purchase on completion), and the connected account id (so the client
+  // initializes Stripe.js against the right account for direct charges).
+  return {
+    clientSecret: session.client_secret,
+    sessionId: session.id,
+    connectedAccountId,
+  }
 }
 
 /**
  * Idempotently records a purchase from a completed Stripe Checkout session.
  * Shared by the client-side completion handler and the webhook so a purchase
  * is recorded exactly once regardless of which path runs first.
+ *
+ * For direct charges the session lives on the connected account, so the
+ * connected account id must be supplied to retrieve it.
  */
-export async function recordPurchaseFromSession(sessionId: string) {
-  const session = await stripe.checkout.sessions.retrieve(sessionId)
+export async function recordPurchaseFromSession(
+  sessionId: string,
+  connectedAccountId?: string | null
+) {
+  const session = connectedAccountId
+    ? await stripe.checkout.sessions.retrieve(sessionId, {
+        stripeAccount: connectedAccountId,
+      })
+    : await stripe.checkout.sessions.retrieve(sessionId)
   
   if (session.payment_status !== 'paid') {
     return { recorded: false, reason: 'unpaid' as const }
@@ -307,8 +326,11 @@ export async function recordPurchaseFromSession(sessionId: string) {
   return { recorded: true, guideId, alreadyExisted: false }
 }
 
-export async function completeCheckout(sessionId: string) {
-  const result = await recordPurchaseFromSession(sessionId)
+export async function completeCheckout(
+  sessionId: string,
+  connectedAccountId?: string | null
+) {
+  const result = await recordPurchaseFromSession(sessionId, connectedAccountId)
   
   if (!result.recorded) {
     throw new Error(
