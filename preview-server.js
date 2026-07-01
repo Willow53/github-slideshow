@@ -91,7 +91,7 @@ function renderDeck() {
   <script src="/node_modules/reveal.js/js/reveal.js"></script>
   <script>
     Reveal.initialize({
-      hash: true,
+      hash: false,
       dependencies: [
         { src: '/node_modules/reveal.js/plugin/markdown/marked.js' },
         { src: '/node_modules/reveal.js/plugin/markdown/markdown.js' },
