@@ -1,0 +1,13 @@
+{
+  "name": "night-lineup-slideshow",
+  "version": "1.0.0",
+  "private": true,
+  "description": "reveal.js slideshow built from Jekyll _posts. Static build for Vercel.",
+  "scripts": {
+    "dev": "node preview-server.js",
+    "build": "node build-static.js"
+  },
+  "dependencies": {
+    "reveal.js": "3.9.2"
+  }
+}
